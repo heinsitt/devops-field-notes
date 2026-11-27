@@ -101,3 +101,109 @@ docker cp api:/var/log/app.log ./app.log
 Use `sh` first: many slim images have no bash. `-u root` is for diagnosis only, and
 anything you change inside a running container disappears at the next deploy. `cp`
 works both ways and is the quickest way to read a log the container will not print.
+
+## 5. Compose
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f --tail=50 api
+docker compose exec api sh
+```
+
+`up -d --build` rebuilds and recreates changed services; `ps` then confirms the
+container was recreated rather than reused. A deploy that "worked" but still serves
+old code is nearly always a container that was never replaced.
+
+```bash
+docker compose config | less          # the file after merge, vars and overrides
+docker compose up -d --force-recreate api
+docker compose restart api            # restarts the process, does not reload env
+```
+
+`config` renders the final YAML, including `.env` substitution and override files,
+which settles most "but my variable is set" arguments. `restart` keeps the old
+environment: a changed `.env` needs `up -d`, not `restart`.
+
+```bash
+docker compose down            # stops and removes containers and networks
+docker compose down -v         # also deletes named volumes
+```
+
+`down -v` deletes the database volume. It is the right command on a throwaway lab
+host and a career-defining mistake on anything with data.
+
+## 6. Networks and ports
+
+```bash
+docker network ls
+docker network inspect bridge --format '{{range .Containers}}{{.Name}} {{end}}'
+docker run --rm --network app_default alpine:3.20 nslookup api
+```
+
+On a user-defined network, containers resolve each other by name or service name;
+on the default `bridge` they only get IPs. That is why a Compose stack works and a
+pile of `docker run` commands does not.
+
+```bash
+docker port api                       # which host port maps where
+docker inspect --format '{{json .NetworkSettings.Ports}}' api
+```
+
+`EXPOSE` in a Dockerfile is documentation, not a publish. Only `-p` or a Compose
+`ports:` entry puts the container on the host.
+
+## 7. Volumes and data
+
+```bash
+docker volume ls
+docker volume inspect api-data --format '{{.Mountpoint}}'
+docker run --rm -v api-data:/data alpine:3.20 ls -la /data
+```
+
+A named volume survives `down` and image rebuilds; a bind mount is just a host path
+and inherits the host's permissions. When a container cannot write to a bind mount,
+the usual cause is a UID mismatch between the image user and the host directory
+owner, not a Docker problem.
+
+```bash
+docker run --rm -v api-data:/data -v "$PWD":/backup alpine:3.20 \
+  tar -czf /backup/api-data.tar.gz -C /data .
+```
+
+Backing up a volume is a throwaway container with two mounts. It is the safest way
+to copy data out without stopping the service for long.
+
+## 8. Registry, auth and housekeeping
+
+```bash
+docker login ghcr.io
+docker tag api:1.4.0 ghcr.io/heinsitt/api:1.4.0
+docker push ghcr.io/heinsitt/api:1.4.0
+docker manifest inspect ghcr.io/heinsitt/api:1.4.0 | head -30
+```
+
+`manifest inspect` shows the platforms and layers in the registry without pulling,
+which is how you confirm an arm64 build actually landed.
+
+```bash
+docker system df -v            # what is using the disk, by image and volume
+docker image prune             # dangling images only
+docker container prune         # stopped containers
+docker builder prune --filter until=24h
+docker events --filter type=container --since 10m
+```
+
+Read `df -v` before deleting anything: build cache, not images, is usually the
+biggest number. `events` is the live feed of starts, dies, OOM kills and health
+status changes, and it is the fastest way to see what a restart loop is doing.
+
+## Dockerfile habits worth keeping
+
+- Pin the base image (`node:20.11-alpine`, not `node:latest`) so a build is repeatable.
+- Install dependencies before copying source, so the cache survives code edits.
+- Run as a non-root `USER`: a container with root inside is root on the volume it mounts.
+- Add a `HEALTHCHECK` when the app has an endpoint, so `docker ps` can say `unhealthy`
+  instead of just `Up`.
+- Use multi-stage builds: build tools in the first stage, runtime in the last, and the
+  final image gets small enough to pull in seconds.
