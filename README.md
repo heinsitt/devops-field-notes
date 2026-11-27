@@ -13,6 +13,7 @@ up twice, and the reason I chose them the first time.
 | [Linux](notes/linux.md) | Processes, disks, services and logs on a fresh host |
 | [Linux CLI](notes/linux-cli.md) | The command line itself: files, text pipelines, processes, network, transfers and log triage |
 | [Docker](notes/docker.md) | Build, run, inspect and clean up without guessing |
+| [Docker CLI](notes/docker-cli.md) | Images and builds, running and reading containers, Compose, networks, volumes, registry and disk housekeeping |
 | [Kubernetes](notes/kubernetes.md) | The ten commands that cover most of a shift |
 | [Observability](notes/observability.md) | PromQL worth memorising, and alert rules that do not page at 3am for nothing |
 
