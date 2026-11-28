@@ -129,3 +129,124 @@ kubectl autoscale deploy/api --min=2 --max=10 --cpu-percent=70
 `rollout status` blocks until the new ReplicaSet is available, so it is the correct
 gate in a pipeline. `restart` is a rolling restart, not a rebuild: it re-pulls only
 if the image tag changed and the pull policy allows it.
+
+## 5. Jobs, cron jobs, config and secrets
+
+```bash
+kubectl create job --from=cronjob/nightly-backup backup-manual
+kubectl get jobs -n payments --sort-by=.metadata.creationTimestamp
+kubectl logs job/backup-manual
+kubectl delete job backup-manual
+```
+
+`--from=cronjob` runs the schedule now, which is how you test a backup job without
+waiting for 02:00. Finished jobs stay in the namespace until something deletes them,
+so a nightly job leaves a year of dead objects unless `ttlSecondsAfterFinished` or a
+cleanup policy exists.
+
+```bash
+kubectl create secret generic app-secrets --from-literal=DB_PASS=change-me \
+  --dry-run=client -o yaml > secrets.yaml
+kubectl create secret docker-registry ghcr \
+  --docker-server=ghcr.io --docker-username=heinsitt --docker-password=...
+kubectl get secret app-secrets -o jsonpath='{.data.DB_PASS}' | base64 -d
+```
+
+A Secret is base64, not encryption: anyone with `get secrets` in the namespace reads
+it. Use `--dry-run=client -o yaml` to get a manifest, then keep it out of git or seal
+it with Sealed Secrets or SOPS.
+
+```bash
+kubectl get cm app-config -o yaml
+kubectl rollout restart deploy/api
+```
+
+Environment variables from a ConfigMap are read once, at container start. Editing the
+ConfigMap does not change the running pod: the restart is the deploy. Mounted files do
+update eventually, but most applications never re-read them.
+
+## 6. Nodes, scheduling and capacity
+
+```bash
+kubectl get nodes -o wide
+kubectl top node
+kubectl describe node worker-1 | sed -n '/Allocated resources/,/Events/p'
+```
+
+The `Allocated resources` block compares requests against allocatable, which is the
+honest answer to "why is this pod Pending". Real usage from `top` is a different
+number: requests are what the scheduler reserved.
+
+```bash
+kubectl get pods -A -o wide --field-selector spec.nodeName=worker-1
+kubectl get pods -A --field-selector status.phase=Pending
+kubectl describe pod api-7d9f8c6b5-x2k4m | grep -A6 Events
+```
+
+A Pending pod is one of four things: not enough CPU or memory, a taint with no
+toleration, a nodeSelector or affinity that matches nothing, or an unbound PVC. The
+events at the bottom of `describe` say which.
+
+```bash
+kubectl cordon worker-1
+kubectl drain worker-1 --ignore-daemonsets --delete-emptydir-data
+kubectl uncordon worker-1
+```
+
+`drain` is `cordon` plus eviction. `--ignore-daemonsets` is required on almost every
+real node, and `--delete-emptydir-data` is the flag that acknowledges emptyDir data
+will be lost. Check PodDisruptionBudgets before draining anything that serves traffic.
+
+```bash
+kubectl taint nodes worker-2 dedicated=db:NoSchedule
+kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
+```
+
+## 7. Access and RBAC
+
+```bash
+kubectl auth can-i --list -n payments
+kubectl auth can-i get secrets --as=system.serviceaccount:payments:api
+kubectl get sa,role,rolebinding -n payments
+kubectl create token api -n payments --duration=1h
+```
+
+`--as` impersonates, so you can answer "what can this ServiceAccount do" without
+holding its token. `create token` prints a short lived JWT, which is the quickest way
+to test the API from a pod's point of view.
+
+```bash
+kubectl get clusterrolebinding -o wide | grep -i cluster-admin
+```
+
+Every broad binding is a future incident. If a workload only needs to read pods in one
+namespace, it should have a Role, not a ClusterRole.
+
+## 8. Output shaping and housekeeping
+
+```bash
+kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.podIP}{"\n"}{end}'
+kubectl get pods -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount
+kubectl get pods --sort-by='.status.containerStatuses[0].restartCount' | tail -5
+kubectl wait --for=condition=available deploy/api --timeout=120s
+```
+
+`jsonpath` is for scripts, `custom-columns` is for humans, and `--sort-by` is how you
+find the one pod that has restarted forty times. `wait` turns "applied" into
+"actually serving", which is what a pipeline should gate on.
+
+```bash
+kubectl get pods -A -o json | jq -r '.items[] | select(.status.containerStatuses[]?.restartCount > 5) | "\(.metadata.namespace)/\(.metadata.name)"'
+kubectl get events -A --sort-by=.metadata.creationTimestamp | tail -20
+```
+
+The first line is the crashloop report nobody writes until an incident. The second is
+the cluster's recent history in order, which is often enough to correlate a deploy
+with a failure without opening a dashboard.
+
+## One rule about writing
+
+Imperative commands are for reading and for debugging. Anything that should still be
+true tomorrow belongs in a manifest, a Helm chart or a kustomize overlay, applied by
+Argo CD or Flux. A `kubectl edit` that fixes an outage is fine; a `kubectl edit` that
+stays is drift, and the next sync will quietly undo it.
