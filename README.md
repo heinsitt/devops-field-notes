@@ -15,6 +15,7 @@ up twice, and the reason I chose them the first time.
 | [Docker](notes/docker.md) | Build, run, inspect and clean up without guessing |
 | [Docker CLI](notes/docker-cli.md) | Images and builds, running and reading containers, Compose, networks, volumes, registry and disk housekeeping |
 | [Kubernetes](notes/kubernetes.md) | The ten commands that cover most of a shift |
+| [Kubernetes CLI](notes/kubernetes-cli.md) | Contexts, reading the cluster, logs and debug, apply and rollback, jobs and secrets, nodes and capacity, RBAC, output shaping |
 | [Observability](notes/observability.md) | PromQL worth memorising, and alert rules that do not page at 3am for nothing |
 
 ## How these are written

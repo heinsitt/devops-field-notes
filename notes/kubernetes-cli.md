@@ -206,7 +206,7 @@ kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
 
 ```bash
 kubectl auth can-i --list -n payments
-kubectl auth can-i get secrets --as=system.serviceaccount:payments:api
+kubectl auth can-i get secrets --as=system:serviceaccount:payments:api
 kubectl get sa,role,rolebinding -n payments
 kubectl create token api -n payments --duration=1h
 ```
